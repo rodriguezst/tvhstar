@@ -171,267 +171,243 @@ const utils = {
                 //
                 //
                 let movistar_nombre = pase["$"].cadena;
-                let index = progPreferences.cadenasHOME.findIndex(item => item.movistar_nombre === movistar_nombre);
 
-                if (index === -1) {
-                    console.log('=============================================')
-                    console.log('convierteJSONaJSONTV ...')
-                    console.log('ATENCIÓN NO PUEDO CONVERTIR EL SIGUIENTE CANAL');
-                    console.log('PORQUE NO LO TENGO DADO DE ALTA EN cadenasHOME');
-                    console.log(`movistar_nombre: ${movistar_nombre}`);
-                    console.log(`index: ${index}`);
-                    console.log('=============================================')
-                } else {
+                let channel_id = movistar_nombre;
+                let display_name = movistar_nombre;
 
-                    let channel_id = progPreferences.cadenasHOME[index].tvh_id;
-                    let display_name = progPreferences.cadenasHOME[index].tvh_nombre;
+                let display_name_alt = undefined;
 
-                    // Busco el mismo programa en cadenasREMOTE, para añadir su display_name como alternativo. 
-                    // Este truco facilita el que Tvheadend asigne automáticamente el EPG de cada cadena
-                    // al canal durante el proceso de creación de la Red->Muxes->Services->Channels en Tvheadend
-                    let indexAlt = progPreferences.cadenasREMOTE.findIndex(item => item.movistar_nombre === movistar_nombre);
-                    let display_name_alt = undefined;
-                    if (indexAlt !== -1) {
-                        display_name_alt = progPreferences.cadenasREMOTE[indexAlt].tvh_nombre;
-                    }
+                // A pelo, el lenguaje siempre será 'es'
+                let langES = 'es';
 
-                    // A pelo, el lenguaje siempre será 'es'
-                    let langES = 'es';
+                // Para las categorías
+                let langEN = 'en';
 
-                    // Para las categorías
-                    let langEN = 'en';
+                // SECCIÓN 'channel'
+                // -------------------
 
-                    // SECCIÓN 'channel'
-                    // -------------------
-
-                    // En el fichero origen (EPG de movistar) los nombres de los 
-                    // canales vienen dentro de cada 'pase', así que voy a ir 
-                    // descubriéndolos de forma dinámica. 
-                    let isCanalGuardado = jsontv.tv.channel.findIndex(item => item["$"].id === channel_id) !== -1 ? true : false;
-                    if (!isCanalGuardado) {
-                        let channel = {
-                            "$": {
-                                "id": channel_id
-                            },
-                            "display-name": [
-                                {
-                                    "_": display_name,
-                                    "$": {
-                                        "lang": langES
-                                    }
-                                }
-                            ]
-                        };
-                        if (display_name_alt !== undefined && display_name !== display_name_alt) {
-                            channel["display-name"].push({
-                                "_": display_name_alt,
-                                "$": {
-                                    "lang": langES
-                                }
-                            });
-                        }
-                        jsontv.tv.channel.push(channel);
-                        progPreferences.numChannels = progPreferences.numChannels + 1;
-                    }
-
-                    // SECCIÓN 'programme'
-                    // -------------------
-
-                    // Convierto la fecha/hora del pase a formato objeto (Date) de modo que 
-                    // pueda hacer operaciones de forma sencilla. 
-                    let [year, month, day] = pase["$"].fecha.split("-");
-                    let [hours, minutes, seconds] = pase.hora[0].split(":");
-                    let programmeStartDateObject = new Date(year, month - 1, day, hours, minutes, seconds, 0);
-
-                    // Convierto la fecha para el campo 'date' : YYYYMMMDD
-                    let programme_date = `${year}${month}${day}`;
-                    // Convierto la hora para el campo 'start' : YYYYMMMDDHHMMSS00 ?TTTT
-                    let programme_start = `${year}${month}${day}${hours}${minutes}${seconds} ${offset}`;
-
-                    // Añado mi start como el stop del pase anterior...
-                    if (lastProgrammes[channel_id] !== undefined) {
-                        let lastProgramme = lastProgrammes[channel_id];
-                        lastProgramme["$"].stop = programme_start;
-                    }
-
-                    // Convierto la Categoría a las soportadas por Tvheadend
-                    let categoria = utils.getCategoria(pase.tipo_ficha[0]);
-
-                    // Preparo el titulo y subtítulo desde el XML:
-                    // pase.descripcion_corta[0]: "título: subtítulo" o "título"
-                    // pase.titulo[0]: "subtítulo"
-                    // (OJO que el título puede que tenga también ":")
-                    let titulo = pase.descripcion_corta[0];
-                    let subtitulo = pase.titulo[0];
-
-                    // Pillo el título
-                    let lastIndex = pase.descripcion_corta[0].lastIndexOf(':');
-                    if (lastIndex !== -1) {
-                        let newTitulo = pase.descripcion_corta[0].substr(0, lastIndex);
-                        // Elimino espacios de delante o detrás 
-                        newTitulo = newTitulo.trim();
-                        // Me aseguro que tengo algo
-                        if (newTitulo.length > 0) {
-                            titulo = newTitulo;
-                        }
-                    }
-
-
-                    // --------------------------------------------------------------------------
-                    //  INICIO ZONA PERSONALIZADA !!!
-                    //
-                    //  Recordemos que este código está pensado para cuando trabajamos con 
-                    //  Tvheadend como backend y KODI como dispositivos.
-                    //
-                    //  En esta sección voy a hacer un par de cosas que puedes, si no te convence,
-                    //  comentar en tu caso. 
-                    //
-                    //  - Me he dado cuenta que casi todas las "Pelis" empiezan con un título
-                    //    "Cine*" así que lo cambio a "Película: nombr de la peli"
-                    //
-                    //  - Como NO viene la "Categoría" de cada pase, pues hago lo que puedo 
-                    //    desde los datos que tenemos, por ejemplo, casi todas las "Pelis" 
-                    //    tiene como título "Cine*", así que les asigno categoría "Movies..."
-                    //
-                    //  - Como ciertos canales sabemos que SON SÍ O SÍ de deportes, pues le 
-                    //    caso a todos sus programas la categoría "Sports..."
-                    //
-                    //  - Las categorías que utilizo son las compatibles con Tvheadend !!!!!!
-                    //
-                    // "Movie / Drama" 
-                    // "News / Current affairs" 
-                    // "Show / Game show"
-                    // "Sports" 
-                    // "Children's / Youth programs" 
-                    // "Music / Ballet / Dance"
-                    // "Arts / Culture (without music)"
-                    // "Social / Political issues / Economics" 
-                    // "Education / Science / Factual topics" 
-                    // "Leisure hobbies" 
-                    //
-                    // --------------------------------------------------------------------------
-
-                    // - Si viene "Cine" en el título y "Título de la peli" en el subtítulo
-                    //   lo cambio por titulo:"Película: título de la peli" y subtitulo:"título de la peli".
-                    //
-                    // Al entrar en los detalles de la emisión se hace redudante pero 
-                    // en la guia que tenemos en Kodi->Tv->Guia se ve muchísimo mejor. 
-                    //
-
-                    // Categoría por TIPO DE CADENA (ver cadenas*.js)
-                    if ( progPreferences.cadenasHOME[index].tvh_categoria ) {
-                        categoria = progPreferences.cadenasHOME[index].tvh_categoria;
-                    }
-
-                    // "switch(true)" abominable que no funciona en otros lenguajes :-)
-                    // http://stackoverflow.com/questions/2896626/switch-statement-for-string-matching-in-javascript
-                    let str = titulo.toLowerCase();
-                    switch (true) {
-
-                        // Fútbol: partidos
-                        case /laliga/.test(str):
-                            if (subtitulo.toLowerCase() !== "laliga") {
-                                titulo = "Fútbol: " + subtitulo;
-                            }
-                            categoria = "Football / Soccer";
-                            break;
-
-                        // Documentales
-                        case /^dok xtra/.test(str):
-                            categoria = "Social / Political issues / Economics";
-                            break;
-
-                        // Cine
-                        case /corto/.test(str):
-                            categoria = "Movie / Drama";
-                            break;
-                        case /cine/.test(str):
-                        case /cine estreno/.test(str):
-                        case /cine xtra/.test(str):
-                        case /cine inédito/.test(str):
-                        case /^cine : /.test(str):
-                            if ( str === "cine" && subtitulo.toLowerCase() === "cine" && pase.sinopsis_larga[0] === "Emisión de una película." ) {
-                                titulo = "Película"
-                                subtitulo = "Emisión de una película."
-                                categoria = "Movie / Drama";
-                            } else {
-                                if (subtitulo.toLowerCase() !== "cine") {
-                                    titulo = "Película: " + subtitulo;
-                                }
-                            }
-                            categoria = "Movie / Drama";
-                            break;
-                        case /^cinexpress/.test(str):
-                        case /^cinema-trix/.test(str):
-                        case /^cine /.test(str):
-                            categoria = "Movie / Drama";
-                            break;
-                        default:
-                            break;
-                    }
-                    // --------------------------------------------------------------------------
-                    //  FIN ZONA PERSONALIZADA !!!
-                    // --------------------------------------------------------------------------
-
-
-                    // --------------------------------------------------------------------------
-                    // Conversión al nuevo formato
-                    // --------------------------------------------------------------------------
-
-                    // Preparo el pase en el nuevo formato
-                    //
-                    let programme = {
+                // En el fichero origen (EPG de movistar) los nombres de los 
+                // canales vienen dentro de cada 'pase', así que voy a ir 
+                // descubriéndolos de forma dinámica. 
+                let isCanalGuardado = jsontv.tv.channel.findIndex(item => item["$"].id === channel_id) !== -1 ? true : false;
+                if (!isCanalGuardado) {
+                    let channel = {
                         "$": {
-                            "start": `${programme_start}`,
-                            "channel": channel_id
+                            "id": channel_id
                         },
-                        "title": [
+                        "display-name": [
                             {
-                                "_": titulo,
-                                "$": {
-                                    "lang": langES
-                                }
-                            }
-                        ],
-                        "sub-title": [
-                            {
-                                "_": subtitulo,
-                                "$": {
-                                    "lang": langES
-                                }
-                            }
-                        ],
-                        "desc": [
-                            {
-                                "_": pase.sinopsis_larga[0],
-                                "$": {
-                                    "lang": langES
-                                }
-                            }
-                        ],
-                        "date": [
-                            {
-                                "_": `${programme_date}`
-                            }
-                        ],
-                        "category": [
-                            {
-                                "_": categoria,
+                                "_": display_name,
                                 "$": {
                                     "lang": langES
                                 }
                             }
                         ]
                     };
-
-                    // Salvo el puntero a este programme para poder
-                    // añadirle el 'stop' cuando descubra el siguiente (start)
-                    lastProgrammes[channel_id] = programme;
-
-                    // Añado el programa al buffer de salida 
-                    jsontv.tv.programme.push(programme);
-                    progPreferences.numProgrammes = progPreferences.numProgrammes + 1;
+                    if (display_name_alt !== undefined && display_name !== display_name_alt) {
+                        channel["display-name"].push({
+                            "_": display_name_alt,
+                            "$": {
+                                "lang": langES
+                            }
+                        });
+                    }
+                    jsontv.tv.channel.push(channel);
+                    progPreferences.numChannels = progPreferences.numChannels + 1;
                 }
+
+                // SECCIÓN 'programme'
+                // -------------------
+
+                // Convierto la fecha/hora del pase a formato objeto (Date) de modo que 
+                // pueda hacer operaciones de forma sencilla. 
+                let [year, month, day] = pase["$"].fecha.split("-");
+                let [hours, minutes, seconds] = pase.hora[0].split(":");
+                let programmeStartDateObject = new Date(year, month - 1, day, hours, minutes, seconds, 0);
+
+                // Convierto la fecha para el campo 'date' : YYYYMMMDD
+                let programme_date = `${year}${month}${day}`;
+                // Convierto la hora para el campo 'start' : YYYYMMMDDHHMMSS00 ?TTTT
+                let programme_start = `${year}${month}${day}${hours}${minutes}${seconds} ${offset}`;
+
+                // Añado mi start como el stop del pase anterior...
+                if (lastProgrammes[channel_id] !== undefined) {
+                    let lastProgramme = lastProgrammes[channel_id];
+                    lastProgramme["$"].stop = programme_start;
+                }
+
+                // Convierto la Categoría a las soportadas por Tvheadend
+                let categoria = utils.getCategoria(pase.tipo_ficha[0]);
+
+                // Preparo el titulo y subtítulo desde el XML:
+                // pase.descripcion_corta[0]: "título: subtítulo" o "título"
+                // pase.titulo[0]: "subtítulo"
+                // (OJO que el título puede que tenga también ":")
+                let titulo = pase.descripcion_corta[0];
+                let subtitulo = pase.titulo[0];
+
+                // Pillo el título
+                let lastIndex = pase.descripcion_corta[0].lastIndexOf(':');
+                if (lastIndex !== -1) {
+                    let newTitulo = pase.descripcion_corta[0].substr(0, lastIndex);
+                    // Elimino espacios de delante o detrás 
+                    newTitulo = newTitulo.trim();
+                    // Me aseguro que tengo algo
+                    if (newTitulo.length > 0) {
+                        titulo = newTitulo;
+                    }
+                }
+
+
+                // --------------------------------------------------------------------------
+                //  INICIO ZONA PERSONALIZADA !!!
+                //
+                //  Recordemos que este código está pensado para cuando trabajamos con 
+                //  Tvheadend como backend y KODI como dispositivos.
+                //
+                //  En esta sección voy a hacer un par de cosas que puedes, si no te convence,
+                //  comentar en tu caso. 
+                //
+                //  - Me he dado cuenta que casi todas las "Pelis" empiezan con un título
+                //    "Cine*" así que lo cambio a "Película: nombr de la peli"
+                //
+                //  - Como NO viene la "Categoría" de cada pase, pues hago lo que puedo 
+                //    desde los datos que tenemos, por ejemplo, casi todas las "Pelis" 
+                //    tiene como título "Cine*", así que les asigno categoría "Movies..."
+                //
+                //  - Como ciertos canales sabemos que SON SÍ O SÍ de deportes, pues le 
+                //    caso a todos sus programas la categoría "Sports..."
+                //
+                //  - Las categorías que utilizo son las compatibles con Tvheadend !!!!!!
+                //
+                // "Movie / Drama" 
+                // "News / Current affairs" 
+                // "Show / Game show"
+                // "Sports" 
+                // "Children's / Youth programs" 
+                // "Music / Ballet / Dance"
+                // "Arts / Culture (without music)"
+                // "Social / Political issues / Economics" 
+                // "Education / Science / Factual topics" 
+                // "Leisure hobbies" 
+                //
+                // --------------------------------------------------------------------------
+
+                // - Si viene "Cine" en el título y "Título de la peli" en el subtítulo
+                //   lo cambio por titulo:"Película: título de la peli" y subtitulo:"título de la peli".
+                //
+                // Al entrar en los detalles de la emisión se hace redudante pero 
+                // en la guia que tenemos en Kodi->Tv->Guia se ve muchísimo mejor. 
+                //
+
+                // "switch(true)" abominable que no funciona en otros lenguajes :-)
+                // http://stackoverflow.com/questions/2896626/switch-statement-for-string-matching-in-javascript
+                let str = titulo.toLowerCase();
+                switch (true) {
+
+                    // Fútbol: partidos
+                    case /laliga/.test(str):
+                        if (subtitulo.toLowerCase() !== "laliga") {
+                            titulo = "Fútbol: " + subtitulo;
+                        }
+                        categoria = "Football / Soccer";
+                        break;
+
+                    // Documentales
+                    case /^dok xtra/.test(str):
+                        categoria = "Social / Political issues / Economics";
+                        break;
+
+                    // Cine
+                    case /corto/.test(str):
+                        categoria = "Movie / Drama";
+                        break;
+                    case /cine/.test(str):
+                    case /cine estreno/.test(str):
+                    case /cine xtra/.test(str):
+                    case /cine inédito/.test(str):
+                    case /^cine : /.test(str):
+                        if ( str === "cine" && subtitulo.toLowerCase() === "cine" && pase.sinopsis_larga[0] === "Emisión de una película." ) {
+                            titulo = "Película"
+                            subtitulo = "Emisión de una película."
+                            categoria = "Movie / Drama";
+                        } else {
+                            if (subtitulo.toLowerCase() !== "cine") {
+                                titulo = "Película: " + subtitulo;
+                            }
+                        }
+                        categoria = "Movie / Drama";
+                        break;
+                    case /^cinexpress/.test(str):
+                    case /^cinema-trix/.test(str):
+                    case /^cine /.test(str):
+                        categoria = "Movie / Drama";
+                        break;
+                    default:
+                        break;
+                }
+                // --------------------------------------------------------------------------
+                //  FIN ZONA PERSONALIZADA !!!
+                // --------------------------------------------------------------------------
+
+
+                // --------------------------------------------------------------------------
+                // Conversión al nuevo formato
+                // --------------------------------------------------------------------------
+
+                // Preparo el pase en el nuevo formato
+                //
+                let programme = {
+                    "$": {
+                        "start": `${programme_start}`,
+                        "channel": channel_id
+                    },
+                    "title": [
+                        {
+                            "_": titulo,
+                            "$": {
+                                "lang": langES
+                            }
+                        }
+                    ],
+                    "sub-title": [
+                        {
+                            "_": subtitulo,
+                            "$": {
+                                "lang": langES
+                            }
+                        }
+                    ],
+                    "desc": [
+                        {
+                            "_": pase.sinopsis_larga[0],
+                            "$": {
+                                "lang": langES
+                            }
+                        }
+                    ],
+                    "date": [
+                        {
+                            "_": `${programme_date}`
+                        }
+                    ],
+                    "category": [
+                        {
+                            "_": categoria,
+                            "$": {
+                                "lang": langES
+                            }
+                        }
+                    ]
+                };
+
+                // Salvo el puntero a este programme para poder
+                // añadirle el 'stop' cuando descubra el siguiente (start)
+                lastProgrammes[channel_id] = programme;
+
+                // Añado el programa al buffer de salida 
+                jsontv.tv.programme.push(programme);
+                progPreferences.numProgrammes = progPreferences.numProgrammes + 1;
             });
         }
         return (jsontv);
